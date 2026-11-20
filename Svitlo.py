@@ -17,6 +17,17 @@ TOKEN = os.getenv("BOT_TOKEN", "").strip()
 if not TOKEN:
     raise RuntimeError(f"BOT_TOKEN не заданий. Створи файл {ENV_FILE} і додай BOT_TOKEN=...")
 
+try:
+    ADMIN_IDS = {
+        int(value.strip())
+        for value in os.getenv("ADMIN_IDS", "").split(",")
+        if value.strip()
+    }
+except ValueError as exc:
+    raise RuntimeError("ADMIN_IDS має містити числові Telegram ID через кому.") from exc
+if any(admin_id <= 0 for admin_id in ADMIN_IDS):
+    raise RuntimeError("ADMIN_IDS має містити додатні Telegram ID.")
+
 SCHEDULE_API_URL = "https://be-svitlo.oe.if.ua/schedule-by-queue"
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "120"))  # секунд
 NOTIFY_MINUTES = int(os.getenv("NOTIFY_MINUTES", "10"))
@@ -29,7 +40,14 @@ log = logging.getLogger("svitlo-bot")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-state = {"users": {}, "last_schedules": {}, "notified": [], "last_check": None, "last_error": None}
+state = {
+    "users": {},
+    "banned_users": {},
+    "last_schedules": {},
+    "notified": [],
+    "last_check": None,
+    "last_error": None
+}
 
 
 
@@ -164,9 +182,119 @@ def user_record(chat_id):
     return state.setdefault("users", {}).setdefault(str(chat_id), {"queue": None})
 
 
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+
+async def ban_middleware(handler, event: Message, data: dict):
+    user = event.from_user
+    if user and not is_admin(user.id) and str(user.id) in state.get("banned_users", {}):
+        await event.answer("⛔ Доступ до бота обмежено адміністратором.")
+        return None
+    return await handler(event, data)
+
+
+dp.message.outer_middleware(ban_middleware)
+
+
+async def require_admin(message: Message) -> bool:
+    if message.from_user and is_admin(message.from_user.id):
+        return True
+    await message.answer("⛔ Ця команда доступна лише адміністратору.")
+    return False
+
+
+def _safe_user_label(value: str) -> str:
+    return " ".join(value.split())[:80]
+
+
+@dp.message(Command("myid"))
+async def my_id(message: Message):
+    if message.from_user:
+        await message.answer(f"Твій Telegram ID: {message.from_user.id}")
+
+
+@dp.message(Command("users"))
+async def list_users(message: Message):
+    if not await require_admin(message):
+        return
+
+    users = state.get("users", {})
+    banned_users = state.get("banned_users", {})
+    lines = [f"👥 Користувачів, які запускали бота: {len(users)}"]
+    for chat_id, record in sorted(users.items()):
+        record = record if isinstance(record, dict) else {}
+        name = _safe_user_label(record.get("first_name") or "Без імені")
+        username = record.get("username")
+        if username:
+            name += f" (@{_safe_user_label(username)})"
+        queue = record.get("queue") or "чергу не вибрано"
+        ban = " | ЗАБАНЕНИЙ" if chat_id in banned_users else ""
+        lines.append(f"{chat_id} | {name} | {queue}{ban}")
+
+    text = "\n".join(lines)
+    for offset in range(0, len(text), 3500):
+        await message.answer(text[offset:offset + 3500])
+
+
+@dp.message(Command("ban"))
+async def ban_user(message: Message):
+    if not await require_admin(message):
+        return
+
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) <= 0:
+        await message.answer("Використання: /ban <user_id> [причина]\nID користувачів можна подивитися командою /users.")
+        return
+
+    target_id = int(parts[1])
+    if is_admin(target_id):
+        await message.answer("Не можна забанити адміністратора.")
+        return
+
+    banned_users = state.setdefault("banned_users", {})
+    if str(target_id) in banned_users:
+        await message.answer(f"Користувач {target_id} уже забанений.")
+        return
+
+    reason = parts[2].strip() if len(parts) > 2 else ""
+    banned_users[str(target_id)] = {
+        "banned_at": datetime.now().isoformat(timespec="seconds"),
+        "reason": reason
+    }
+    save_state()
+    await message.answer(f"✅ Користувача {target_id} забанено.")
+
+
+@dp.message(Command("unban"))
+async def unban_user(message: Message):
+    if not await require_admin(message):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) <= 0:
+        await message.answer("Використання: /unban <user_id>")
+        return
+
+    target_id = parts[1]
+    banned_users = state.setdefault("banned_users", {})
+    if banned_users.pop(target_id, None) is None:
+        await message.answer(f"Користувача {target_id} немає у списку банів.")
+        return
+
+    save_state()
+    await message.answer(f"✅ Користувача {target_id} розбанено.")
+
+
 
 @dp.message(Command("start"))
 async def start(message: Message):
+    if message.from_user:
+        record = user_record(str(message.chat.id))
+        record["first_name"] = message.from_user.full_name
+        record["username"] = message.from_user.username
+        record.setdefault("started_at", datetime.now().isoformat(timespec="seconds"))
+        save_state()
     await message.answer(
         "Привіт! Я відстежую графік відключень Прикарпаттяобленерго.\n\n"
         "Обери свою чергу кнопкою нижче. Після вибору я надсилатиму попередження за 10 хв до відключення "
