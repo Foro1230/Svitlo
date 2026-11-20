@@ -171,6 +171,19 @@ def schedule_to_text(intervals):
     return "\n".join(segments) if segments else "⚠️ Для цієї черги API не повернуло інтервалів графіка."
 
 
+def schedule_transitions(intervals):
+    transitions = []
+    spans_midnight = bool(
+        intervals and intervals[0][0] == 0 and intervals[-1][1] == 24 * 60
+    )
+    for start_minute, end_minute in intervals:
+        if start_minute != 0 or not spans_midnight:
+            transitions.append((start_minute, "off"))
+        if end_minute != 24 * 60 or not spans_midnight:
+            transitions.append((end_minute, "on"))
+    return sorted(transitions)
+
+
 def make_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=q) for q in QUEUES[i:i + 2]] for i in range(0, len(QUEUES), 2)],
@@ -369,7 +382,6 @@ async def monitor_loop():
     while True:
         try:
             schedules = await asyncio.to_thread(fetch_all_schedules)
-            today = date.today().isoformat()
             previous = state.setdefault("last_schedules", {})
             # Перше отримання — лише запам'ятовуємо базовий графік, без сповіщення про зміни.
             for queue, intervals in schedules.items():
@@ -395,23 +407,24 @@ async def monitor_loop():
                     await send_to_queue(queue, msg)
                 previous[queue] = [list(interval) for interval in new_intervals]
 
-                # 10-хвилинні нагадування для користувачів, що вибрали цю чергу.
+                # Нагадування про вимкнення та відновлення світла.
                 now = datetime.now()
-                for start_minute, _ in new_intervals:
-                    start_dt = now.replace(
-                        hour=start_minute // 60,
-                        minute=start_minute % 60,
+                for transition_minute, action in schedule_transitions(new_intervals):
+                    transition_dt = now.replace(
+                        hour=0,
+                        minute=0,
                         second=0,
                         microsecond=0
-                    )
-                    delta = (start_dt - now).total_seconds()
-                    notification_key = f"{today}|{queue}|{start_minute}"
+                    ) + timedelta(minutes=transition_minute)
+                    delta = (transition_dt - now).total_seconds()
+                    notification_key = f"{transition_dt.date().isoformat()}|{queue}|{action}|{transition_minute % (24 * 60)}"
                     notified = set(state.get("notified", []))
                     if 0 < delta <= NOTIFY_MINUTES * 60 and notification_key not in notified:
+                        action_text = "вимкнуть" if action == "off" else "увімкнуть"
                         await send_to_queue(
                             queue,
-                            f"⚠️ Через приблизно {int(delta // 60)} хв вимкнуть світло!\n"
-                            f"Черга {queue}\nПочаток: {start_dt:%H:%M}"
+                            f"⚠️ Через приблизно {max(1, int((delta + 59) // 60))} хв {action_text} світло!\n"
+                            f"Черга {queue}\nЧас: {transition_dt:%H:%M}"
                         )
                         notified.add(notification_key)
                         state["notified"] = list(notified)
