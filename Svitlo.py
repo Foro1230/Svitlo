@@ -218,7 +218,7 @@ async def choose_queue(message: Message):
         if hours is None:
             await message.answer(f"⚠️ Чергу {queue} не вдалося знайти на сайті. Я зберіг вибір і повторю перевірку автоматично.")
         else:
-            await message.answer(f"📅 Графік для черги {queue}:\n{schedule_to_text(hours)}\n\n🔔 Моніторинг увімкнено. Попередження — за {NOTIFY_MINUTES} хв до відключення.")
+            await message.answer(f"📅 Графік для черги {queue}:\n{schedule_to_text(hours)}\n\n🔔 Моніторинг увімкнено. Попередження — за {NOTIFY_MINUTES} хв до відключення.\nПідтримати автора: 4441111030452761")
     except Exception as e:
         log.exception("Помилка під час отримання графіка")
         await message.answer("⚠️ Не зміг зараз отримати графік із сайту, але чергу збережено. Спробую ще раз автоматично.")
