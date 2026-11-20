@@ -2,8 +2,9 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, date, timedelta, time
+from datetime import datetime, timedelta, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from aiogram import Bot, Dispatcher, F
@@ -29,6 +30,7 @@ if any(admin_id <= 0 for admin_id in ADMIN_IDS):
     raise RuntimeError("ADMIN_IDS має містити додатні Telegram ID.")
 
 SCHEDULE_API_URL = "https://be-svitlo.oe.if.ua/schedule-by-queue"
+UKRAINE_TZ = ZoneInfo("Europe/Kyiv")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "120"))  # секунд
 NOTIFY_MINUTES = int(os.getenv("NOTIFY_MINUTES", "10"))
 QUEUES = [f"{n}.{part}" for n in range(1, 6) for part in (1, 2)]
@@ -425,7 +427,7 @@ async def monitor_loop():
                 previous[queue] = [list(interval) for interval in new_intervals]
 
                 # Нагадування про вимкнення та відновлення світла.
-                now = datetime.now()
+                now = datetime.now(UKRAINE_TZ)
                 for transition_minute, action in schedule_transitions(new_intervals):
                     transition_dt = now.replace(
                         hour=0,
@@ -446,8 +448,9 @@ async def monitor_loop():
                         notified.add(notification_key)
                         state["notified"] = list(notified)
             # Keep reminder history limited to the current and previous day.
-            state["notified"] = [k for k in state.get("notified", []) if k.split("|", 1)[0] >= (date.today() - timedelta(days=1)).isoformat()]
-            state["last_check"] = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            today = datetime.now(UKRAINE_TZ).date()
+            state["notified"] = [k for k in state.get("notified", []) if k.split("|", 1)[0] >= (today - timedelta(days=1)).isoformat()]
+            state["last_check"] = datetime.now(UKRAINE_TZ).strftime("%d.%m.%Y %H:%M:%S")
             state["last_error"] = None
             save_state()
         except Exception as e:
