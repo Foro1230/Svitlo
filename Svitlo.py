@@ -147,6 +147,7 @@ def schedule_to_text(intervals):
             segments.append(f"🟢 {_format_schedule_interval((cursor, start_minute))}")
         segments.append(f"🔴 {_format_schedule_interval((start_minute, end_minute))}")
         cursor = end_minute
+        print("Подякувати автору можна на 4441111030452761")
     if cursor < 24 * 60:
         segments.append(f"🟢 {_format_schedule_interval((cursor, 24 * 60))}")
     return "\n".join(segments) if segments else "⚠️ Для цієї черги API не повернуло інтервалів графіка."
