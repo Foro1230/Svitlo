@@ -32,7 +32,9 @@ SCHEDULE_API_URL = "https://be-svitlo.oe.if.ua/schedule-by-queue"
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "120"))  # секунд
 NOTIFY_MINUTES = int(os.getenv("NOTIFY_MINUTES", "10"))
 QUEUES = [f"{n}.{part}" for n in range(1, 6) for part in (1, 2)]
-STATE_FILE = Path("bot_state.json")
+STATE_FILE = Path(os.getenv("BOT_STATE_FILE", Path(__file__).resolve().with_name("bot_state.json"))).expanduser()
+if not STATE_FILE.is_absolute():
+    STATE_FILE = Path(__file__).resolve().parent / STATE_FILE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("svitlo-bot")
@@ -56,14 +58,26 @@ def load_state():
     if STATE_FILE.exists():
         try:
             loaded = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                state.update(loaded)
+            if not isinstance(loaded, dict):
+                raise ValueError("Файл стану має містити JSON-об'єкт.")
+            for key, default in state.items():
+                value = loaded.get(key, default)
+                if key in {"users", "banned_users", "last_schedules"} and not isinstance(value, dict):
+                    raise ValueError(f"Поле {key} у файлі стану має бути об'єктом.")
+                if key == "notified" and not isinstance(value, list):
+                    raise ValueError("Поле notified у файлі стану має бути списком.")
+                state[key] = value
+            log.info("Стан бота завантажено з %s", STATE_FILE)
         except Exception:
-            log.exception("Не вдалося прочитати bot_state.json; запускаю з чистим станом")
+            log.exception("Не вдалося прочитати файл стану %s; файл залишено без змін", STATE_FILE)
+            raise
 
 
 def save_state():
-    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary_file = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+    temporary_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary_file.replace(STATE_FILE)
 
 
 def get_schedule(queue: str):
@@ -239,11 +253,10 @@ async def list_users(message: Message):
         record = record if isinstance(record, dict) else {}
         name = _safe_user_label(record.get("first_name") or "Без імені")
         username = record.get("username")
-        if username:
-            name += f" (@{_safe_user_label(username)})"
+        username_label = f"@{_safe_user_label(username)}" if username else "username відсутній"
         queue = record.get("queue") or "чергу не вибрано"
         ban = " | ЗАБАНЕНИЙ" if chat_id in banned_users else ""
-        lines.append(f"{chat_id} | {name} | {queue}{ban}")
+        lines.append(f"{chat_id} ({username_label}) | {name} | {queue}{ban}")
 
     text = "\n".join(lines)
     for offset in range(0, len(text), 3500):
@@ -353,6 +366,10 @@ async def choose_queue(message: Message):
     chat_id = str(message.chat.id)
     record = user_record(chat_id)
     record["queue"] = queue
+    if message.from_user:
+        record["first_name"] = message.from_user.full_name
+        record["username"] = message.from_user.username
+        record.setdefault("started_at", datetime.now().isoformat(timespec="seconds"))
     save_state()
     try:
         schedules = await asyncio.to_thread(fetch_all_schedules)
