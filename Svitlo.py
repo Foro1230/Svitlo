@@ -387,12 +387,15 @@ async def choose_queue(message: Message):
 
 
 async def send_to_queue(queue, text):
+    sent_count = 0
     for chat_id, user in list(state.get("users", {}).items()):
         if user.get("queue") == queue:
             try:
                 await bot.send_message(int(chat_id), text)
+                sent_count += 1
             except Exception:
                 log.exception("Не вдалося надіслати повідомлення chat_id=%s", chat_id)
+    return sent_count
 
 
 
@@ -440,13 +443,19 @@ async def monitor_loop():
                     notified = set(state.get("notified", []))
                     if 0 < delta <= NOTIFY_MINUTES * 60 and notification_key not in notified:
                         action_text = "вимкнуть" if action == "off" else "увімкнуть"
-                        await send_to_queue(
+                        sent_count = await send_to_queue(
                             queue,
                             f"⚠️ Через приблизно {max(1, int((delta + 59) // 60))} хв {action_text} світло!\n"
                             f"Черга {queue}\nЧас: {transition_dt:%H:%M}"
                         )
-                        notified.add(notification_key)
-                        state["notified"] = list(notified)
+                        if sent_count:
+                            notified.add(notification_key)
+                            state["notified"] = list(notified)
+                        else:
+                            log.warning(
+                                "Не вдалося доставити нагадування для черги %s; спробуємо знову під час наступної перевірки",
+                                queue
+                            )
             # Keep reminder history limited to the current and previous day.
             today = datetime.now(UKRAINE_TZ).date()
             state["notified"] = [k for k in state.get("notified", []) if k.split("|", 1)[0] >= (today - timedelta(days=1)).isoformat()]
