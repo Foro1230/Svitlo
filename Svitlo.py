@@ -104,10 +104,16 @@ def get_schedule(queue: str):
         log.error("Некоректний формат графіка для черги %s", queue)
         return None
 
-    queue_data = queues_data.get(queue, [])
+    if queue not in queues_data:
+        log.error("API не повернуло графік для черги %s", queue)
+        return None
+
+    queue_data = queues_data[queue]
     if not isinstance(queue_data, list):
         log.error("Некоректний формат графіка для черги %s", queue)
         return None
+    if not queue_data:
+        return []
 
     result = []
     for item in queue_data:
@@ -174,6 +180,9 @@ def _format_schedule_interval(interval):
 
 
 def schedule_to_text(intervals):
+    if not intervals:
+        return "🟢 00:00–24:00 — світло весь день (за графіком відключень не заплановано)."
+
     segments = []
     cursor = 0
     for start_minute, end_minute in intervals:
@@ -184,7 +193,7 @@ def schedule_to_text(intervals):
         print("Подякувати автору можна на 4441111030452761")
     if cursor < 24 * 60:
         segments.append(f"🟢 {_format_schedule_interval((cursor, 24 * 60))}")
-    return "\n".join(segments) if segments else "⚠️ Для цієї черги API не повернуло інтервалів графіка."
+    return "\n".join(segments)
 
 
 def schedule_transitions(intervals):
