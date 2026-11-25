@@ -1,16 +1,4 @@
-import asyncio
-import json
-import logging
-import os
-from datetime import datetime, timedelta, time
-from pathlib import Path
-from zoneinfo import ZoneInfo
 
-import requests
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from dotenv import load_dotenv
 
 ENV_FILE = Path(__file__).resolve().with_name(".env")
 load_dotenv(dotenv_path=ENV_FILE)
